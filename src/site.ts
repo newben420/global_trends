@@ -20,4 +20,6 @@ export class Site {
     
     static MAIN_INTERVAL_MS: number = parseInt(process.env["MAIN_INTERVAL_MS"] || "0") || 5;
 
+    static KEYWORD_SOFT_EXPIRE_MS: number = parseInt(process.env["KEYWORD_SOFT_EXPIRE_MS"] || "0") || 3600000;
+    static KEYWORD_HARD_EXPIRE_MS: number = parseInt(process.env["KEYWORD_HARD_EXPIRE_MS"] || "0") || 86400000;
 }

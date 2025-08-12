@@ -1,22 +1,30 @@
+import { Site } from './../site';
 import { arrayMode } from './../lib/array_mode';
 import { countries3to2, countryCodes } from '../model/countries';
-import { CountryCode, RawData, theme2category } from '../model/theme2category';
+import { CountryCode, KeywordEntry, RawData, theme2category } from '../model/theme2category';
 import { getTimeElapsed } from './../lib/date_time';
 import { Log } from './../lib/log';
-import { Site } from "../site";
 import axios from 'axios';
 import unzipper from 'unzipper';
 import split2 from 'split2';
 import { transform } from 'stream-transform';
 import { Writable } from 'stream';
 
-const SLUG = "MainEngine";
-const WEIGHT = 3;
-const MAX_RECORDS = 5000;
-const MAX_PARSED_ITEMS = 1000;
+const SLUG = "MainEngine"; /* Engine name to be used n flow logs */
+const WEIGHT = 3; /* Weight to use in flow logs */
+const MAX_RECORDS = 5000; /* Max records that can be parsed from a CSV file */
+const MAX_PARSED_ITEMS = 1000; /* Max items(keywords/categories) that can be considered during update */
+const MAX_CATEGORIES = 5; /* Max categories per keyword that can be kept in trends */
+const MAX_KEYWORDS = 100; /* Max keywords per country that can be kept in trends */
 
 export class MainEngine {
+
+    private static trends: Record<CountryCode, KeywordEntry[]> = {};
+
     static start = () => new Promise<boolean>((resolve, reject) => {
+        for (const cc of countryCodes) {
+            MainEngine.trends[cc] = [];
+        }
         setTimeout(() => {
             MainEngine.run();
         }, 1000);
@@ -155,23 +163,23 @@ export class MainEngine {
                     const keywords = Array.from(new Set((cols[23] || '').split(";").map(x => x.split(",")[0].trim()).filter(Boolean)));
                     if (keywords.length > 0) {
                         const tone = parseFloat((cols[15] || '').split(",")[0]) || 0;
-                        if(!structured[country]){
+                        if (!structured[country]) {
                             structured[country] = {};
                         }
-                        for(const keyword of keywords){
-                            if(structured[country][keyword]){
+                        for (const keyword of keywords) {
+                            if (structured[country][keyword]) {
                                 // keyword already exist in the country
                                 // updating category
                                 structured[country][keyword].category = Array.from(new Set(structured[country][keyword].category.concat([category])));
-                                if(structured[country][keyword].category.length > MAX_PARSED_ITEMS){
+                                if (structured[country][keyword].category.length > MAX_PARSED_ITEMS) {
                                     structured[country][keyword].category = structured[country][keyword].category.slice(structured[country][keyword].category.length - MAX_PARSED_ITEMS);
                                 }
                                 // finalizing
-                                const newCount =  structured[country][keyword].count + 1;
+                                const newCount = structured[country][keyword].count + 1;
                                 structured[country][keyword].tone = (structured[country][keyword].tone * structured[country][keyword].count + tone) / newCount;
                                 structured[country][keyword].count = newCount;
                             }
-                            else if(Object.keys(structured[country]).length < MAX_PARSED_ITEMS){
+                            else if (Object.keys(structured[country]).length < MAX_PARSED_ITEMS) {
                                 // new keyword
                                 structured[country][keyword] = {
                                     category: [category],
@@ -186,6 +194,59 @@ export class MainEngine {
             }
         }
         return structured;
+    }
+
+    private static mergeUpdatedData = (
+        newData: Record<CountryCode, Record<
+            string,
+            RawData
+        >>
+    ) => {
+        const now = Date.now();
+
+        for (const country of Object.keys(newData) as CountryCode[]) {
+            if (!MainEngine.trends[country]) {
+                MainEngine.trends[country] = [];
+            }
+            const oldList = MainEngine.trends[country];
+            const oldPositions = new Map(oldList.map((e, idx) => [e.keyword, idx]));
+
+            // Merge
+            for (const [kw, { category, tone, count }] of Object.entries(newData[country])) {
+                const existing = oldList.find(e => e.keyword === kw);
+                if(existing){
+                    existing.categories = [...new Set([...existing.categories, ...category])].slice(-MAX_CATEGORIES);
+                    existing.tone = (existing.tone * existing.count + tone * count) / (existing.count + count);
+                    existing.count += count;
+                    existing.lastUpdated = now;
+                }
+                else{
+                    oldList.push({keyword: kw, categories: category, tone, count, lastUpdated: now, delta: 0});
+                }
+            }
+
+            // Soft expire
+            const filtered = oldList.filter(e => now - e.lastUpdated <= Site.KEYWORD_SOFT_EXPIRE_MS);
+
+            // Sort & delta
+            filtered.sort((a, b) => b.count - a.count);
+            filtered.forEach((e, idx) => {
+                const oldIndex = oldPositions.get(e.keyword);
+                e.delta = oldIndex != null ? oldIndex - idx : 0;
+            });
+
+            // Trim
+            MainEngine.trends[country] = filtered.slice(0, MAX_KEYWORDS);
+        }
+
+        // Hard expire for untouched countries
+        for(const country of Object.keys(MainEngine.trends) as CountryCode[]){
+            if(!(country in newData)){
+                MainEngine.trends[country] = MainEngine.trends[country].filter(
+                    e => now - e.lastUpdated <= Site.KEYWORD_HARD_EXPIRE_MS
+                );
+            }
+        }
     }
 
     private static run = async () => {
@@ -204,11 +265,16 @@ export class MainEngine {
                     x.slice(-1)[0],
                     countries3to2[x[7] || x[17]] || ''
                 ])).filter(x => x[0] && x[1]));
+                Log.flow([SLUG, `Iteration`, `Success`, `Downloaded and processed Exports table.`], WEIGHT);
                 const gkgData = await MainEngine.downloadZip(gkg);
                 if (gkgData) {
+                    Log.flow([SLUG, `Iteration`, `Success`, `Downloadeded GKG table.`], WEIGHT);
                     MainEngine.lastGKGURL = gkg;
-                    const m = MainEngine.processGKGdata(gkgData, expData);
-                    console.log(JSON.stringify(m, null, 2));
+                    const newData = MainEngine.processGKGdata(gkgData, expData);
+                    Log.flow([SLUG, `Iteration`, `Success`, `Processed GKG table.`], WEIGHT);
+                    MainEngine.mergeUpdatedData(newData);
+                    Log.flow([SLUG, `Iteration`, `Success`, `Merged GKG table.`], WEIGHT);
+                    console.log(MainEngine.trends);
                     // TODO - Continue from here.
                     /**
                      * Now we have a structured data of updated trends by countries...
@@ -233,7 +299,7 @@ export class MainEngine {
                      */
                 }
                 else {
-                    Log.flow([SLUG, `Iteration`, `Error`, `Could not get GKG data.`], WEIGHT);
+                    Log.flow([SLUG, `Iteration`, `Error`, `Could not get GKG table.`], WEIGHT);
                 }
             }
         }

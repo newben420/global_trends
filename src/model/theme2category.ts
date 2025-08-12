@@ -6,9 +6,18 @@ export type CountryCode = string;
 export type CategorySlug = string;
 
 export interface RawData {
-    category: CategorySlug[],
-    tone: number,
-    count: number,
+    category: CategorySlug[];
+    tone: number;
+    count: number;
+}
+
+export interface KeywordEntry {
+    keyword: string;
+    categories: CategorySlug[];
+    tone: number;
+    lastUpdated: number;
+    count: number;
+    delta: number;
 }
 
 export const theme2category = (
