@@ -275,28 +275,6 @@ export class MainEngine {
                     MainEngine.mergeUpdatedData(newData);
                     Log.flow([SLUG, `Iteration`, `Success`, `Merged GKG table.`], WEIGHT);
                     console.log(MainEngine.trends);
-                    // TODO - Continue from here.
-                    /**
-                     * Now we have a structured data of updated trends by countries...
-                     * we need extra config vars SOFT_TIMEOUT_MS (a few hours), and HARD_TIMEOUT_MS (a day or more)
-                     * We need to maintain a static object that we will be consolidating this to. it should be initialized with an empty object for each country in the start method
-                     * for each country present in new one
-                     * * update static object and ensure it is sorted already in descending order of count.
-                     * * remove soft expired keywords
-                     * * then remove excess keywords that exceed MAX_PARSED_WHATEVER
-                     * for other countries not present in new object.
-                     * * remove hard expired keywords.
-                     * ensure all keywords are sorted after any change, for easy retrieval and parsing, and snapshots.
-                     * proposed structure of static object
-                     * Record<CountryCode, {
-                     *  keyword: string,
-                     *  count: number,
-                     *  categories: CategorySlug[]... an array of category slugs' the keyword is associated with... keeping only recent N (say 2 - 5),
-                     *  note: number,
-                     *  lastUpdated: number,
-                     *  delta: number (+/- indicating its direction of movement and integer specifying the magnitude of its movement in that direction, if moved during sorting.... e.g. -2, for dropping down the list)
-                     * }[]>
-                     */
                 }
                 else {
                     Log.flow([SLUG, `Iteration`, `Error`, `Could not get GKG table.`], WEIGHT);
